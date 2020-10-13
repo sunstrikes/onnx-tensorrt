@@ -2230,14 +2230,33 @@ DEFINE_BUILTIN_OP_IMPORTER(Pad)
 
     ASSERT(mode == "constant" && value == 0.f && "This version of TensorRT only supports constant 0 padding!",
         ErrorCode::kUNSUPPORTED_NODE);
-    ASSERT(convertOnnxPadding(onnxPadding, &begPadding, &endPadding)
-        && "This version of TensorRT only supports padding on the outer two dimensions!",
-        ErrorCode::kUNSUPPORTED_NODE);
+    //ASSERT(convertOnnxPadding(onnxPadding, &begPadding, &endPadding)
+    //    && "This version of TensorRT only supports padding on the outer two dimensions!",
+    //    ErrorCode::kUNSUPPORTED_NODE);
+    if (convertOnnxPadding(onnxPadding, &begPadding, &endPadding)) {
+        //2d padding
+        auto* layer = ctx->network()->addPaddingNd(*tensorPtr, begPadding, endPadding);
+        ctx->registerLayer(layer, node.name());
+        tensorPtr = layer->getOutput(0);
+    } else {
+        // Populate instanceNormalization plugin properties.
+        const std::string pluginName = "Padding3D_TRT";
+        const std::string pluginVersion = "1";
+        std::vector<nvinfer1::PluginField> f;
+        f.emplace_back("epsilon", &epsilon, nvinfer1::PluginFieldType::kFLOAT32, 1);
+        f.emplace_back("scales", scale_weights.values, nvinfer1::PluginFieldType::kFLOAT32, scale_weights.count());
+        f.emplace_back("bias", bias_weights.values, nvinfer1::PluginFieldType::kFLOAT32, bias_weights.count());
 
-    auto* layer = ctx->network()->addPaddingNd(*tensorPtr, begPadding, endPadding);
-    ctx->registerLayer(layer, node.name());
-    tensorPtr = layer->getOutput(0);
+        // Create plugin from registry
+        nvinfer1::IPluginV2* plugin = createPlugin(node.name(), importPluginCreator(pluginName, pluginVersion), f);
 
+        ASSERT(plugin != nullptr && "InstanceNormalization plugin was not found in the plugin registry!",
+            ErrorCode::kUNSUPPORTED_NODE);
+
+        auto* layer = ctx->network()->addPluginV2(&tensorPtr, 1, *plugin);
+        ctx->registerLayer(layer, node.name());
+        RETURN_FIRST_OUTPUT(layer);
+    }
     // Squeeze back to original rank if necessary
     if (needToExpandDims)
     {
