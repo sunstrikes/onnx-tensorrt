@@ -19,11 +19,25 @@
  # DEALINGS IN THE SOFTWARE.
 
 cmake_minimum_required(VERSION 3.13)
-project(onnx2trt LANGUAGES CXX C)
+project(onnx2trt LANGUAGES CXX C CUDA)
 
+set(DEFAULT_CUDA_VERSION 10.2)
 set(ONNX2TRT_ROOT ${PROJECT_SOURCE_DIR})
 # Set C++11 as standard for the whole project
 set(CMAKE_CXX_STANDARD  11)
+
+#cuda
+set(CUDA_DIR /home/work/cuda-10.2)
+find_package(CUDA 10.2 REQUIRED)
+    #             /home/work/cuda-10.2
+    #         NO_DEFAULT_PATH)
+include_directories(
+    ${CUDA_INCLUDE_DIRS}
+    ${CUDNN_ROOT_DIR}/include
+)
+set(CUDA_TOOLKIT_ROOT_DIR /home/work/cuda-10.2)
+find_library(CUDART_LIB cudart HINTS ${CUDA_TOOLKIT_ROOT_DIR} PATH_SUFFIXES lib lib64)
+set(CUDA_LIBRARIES ${CUDART_LIB})
 
 # Enable compiler warnings
 if (CMAKE_COMPILER_IS_GNUCC)
@@ -59,6 +73,9 @@ set(IMPORTER_SOURCES
   LoopHelpers.cpp
   RNNHelpers.cpp
   OnnxAttrs.cpp
+  plugin/padding3D.cu
+  plugin/padding3DPlugin.cpp
+  plugin/reducedMath.cpp
 )
 
 # Do not build ONNXIFI by default.
@@ -131,11 +148,16 @@ if(NOT TENSORRT_FOUND)
 endif()
 
 # --------------------------------
+# plugin compile
+# --------------------------------
+include_directories(plugin)
+add_subdirectory(plugin)
+# --------------------------------
 # Importer library
 # --------------------------------
 add_library(nvonnxparser SHARED ${IMPORTER_SOURCES})
 target_include_directories(nvonnxparser PUBLIC ${ONNX_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR})
-target_link_libraries(nvonnxparser PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY})
+target_link_libraries(nvonnxparser PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY} ${CUDA_LIBRARIES})
 set_target_properties(nvonnxparser PROPERTIES
   VERSION   ${ONNX2TRT_MAJOR}.${ONNX2TRT_MINOR}.${ONNX2TRT_PATCH}
   SOVERSION ${ONNX2TRT_MAJOR}
@@ -160,7 +182,7 @@ endif()
 # --------------------------------
 add_executable(onnx2trt ${EXECUTABLE_SOURCES})
 target_include_directories(onnx2trt PUBLIC ${ONNX_INCLUDE_DIRS})
-target_link_libraries(onnx2trt PUBLIC ${PROTOBUF_LIB} onnx nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS}) #${CUDA_LIBRARIES} 
+target_link_libraries(onnx2trt PUBLIC ${PROTOBUF_LIB} onnx nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS} ${CUDA_LIBRARIES}) #${CUDA_LIBRARIES} 
 
 # --------------------------------
 # API Tests

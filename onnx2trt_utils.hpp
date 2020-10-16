@@ -164,8 +164,11 @@ bool convertDtype(int32_t onnx_dtype, nvinfer1::DataType* trt_dtype);
 int32_t* convertINT64(const int64_t* weightValues, nvinfer1::Dims shape, IImporterContext* ctx);
 
 // Helper function to convert ONNX padding into TRT padding
-bool convertOnnxPadding(
-    const std::vector<int64_t>& onnxPadding, nvinfer1::Dims2* begPadding, nvinfer1::Dims2* endPadding);
+bool convertOnnxPadding2D(
+    const std::vector<int64_t>& onnxPadding, nvinfer1::Dims* begPadding, nvinfer1::Dims* endPadding);
+
+bool convertOnnxPadding3D(
+    const std::vector<int64_t>& onnxPadding, nvinfer1::Dims* begPadding, nvinfer1::Dims* endPadding);
 
 // Helper function to create zero shifts for QuantizeLinear/DequantizeLinear ops
 onnx2trt::ShapedWeights createZeroShifts(const onnx2trt::ShapedWeights& shiftInt8, int32_t type, IImporterContext* ctx);

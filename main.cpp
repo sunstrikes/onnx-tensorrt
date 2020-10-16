@@ -23,6 +23,7 @@
 #include "NvOnnxParser.h"
 #include "onnx_utils.hpp"
 #include "common.hpp"
+#include "NvInferRuntime.h"
 #include <onnx/optimizer/optimize.h>
 
 #include <google/protobuf/io/coded_stream.h>
@@ -284,6 +285,14 @@ int main(int argc, char* argv[]) {
   }
 
   bool fp16 = trt_builder->platformHasFastFp16();
+  //config
+  auto config = trt_builder->createBuilderConfig();
+  auto profileCalib = trt_builder->createOptimizationProfile();
+  // We do not need to check the return of setDimension and setCalibrationProfile here as all dims are explicitly set
+  profileCalib->setDimensions("input", nvinfer1::OptProfileSelector::kMIN, nvinfer1::Dims3{99, 224, 224});
+  profileCalib->setDimensions("input", nvinfer1::OptProfileSelector::kOPT, nvinfer1::Dims3{297, 224, 224});
+  profileCalib->setDimensions("input", nvinfer1::OptProfileSelector::kMAX, nvinfer1::Dims3{594, 224, 224});
+  config->addOptimizationProfile(profileCalib);
 
   if( !engine_filename.empty() ) {
     if( verbosity >= (int)nvinfer1::ILogger::Severity::kWARNING ) {
@@ -302,7 +311,7 @@ int main(int argc, char* argv[]) {
       return -5;
     }
     trt_builder->setDebugSync(debug_builder);
-    auto trt_engine = common::infer_object(trt_builder->buildCudaEngine(*trt_network.get()));
+    auto trt_engine = common::infer_object(trt_builder->buildEngineWithConfig(*trt_network.get(), *config));
 
     auto engine_plan = common::infer_object(trt_engine->serialize());
     std::ofstream engine_file(engine_filename.c_str());

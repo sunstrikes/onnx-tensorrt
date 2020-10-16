@@ -1,20 +1,6 @@
-/*
- * Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 #include "padding3DPlugin.h"
 #include "plugin.h"
+#include "padding3D.h"
 #include <algorithm>
 #include <cuda_runtime_api.h>
 #include <iostream>
@@ -82,7 +68,7 @@ IPluginV2Ext* Padding3DPluginCreator::deserializePlugin(const char* name, const 
     return new Padding3D(data, length);
 }
 
-Padding3D::Padding3D(const Dims3& prePadding, const Dims3& prePadding) {
+Padding3D::Padding3D(const Dims& prePadding, const Dims& postPadding) {
     mPrePadding = prePadding;
     mPostPadding = postPadding;
 }
@@ -92,21 +78,27 @@ int Padding3D::getNbOutputs() const
     return 1;
 }
 
-Dims Padding3D::getOutputDimensions(int index, const Dims* inputDims, int nbInputs)
+//Dims Padding3D::getOutputDimensions(int index, const Dims* inputDims, int nbInputs)
+nvinfer1::DimsExprs Padding3D::getOutputDimensions(int outputIndex, const nvinfer1::DimsExprs* inputs, int nbInputs, nvinfer1::IExprBuilder& exprBuilder)
 {
     assert(nbInputs == 1);
-    nvinfer1::Dims const& input = inputDims[0];
-    assert(index == 0);
-    nvinfer1::Dims output;
+    nvinfer1::DimsExprs const& input = inputs[0];
+    assert(outputIndex == 0);
+    nvinfer1::DimsExprs output;
     output.nbDims = input.nbDims;
     //last 3dim
     auto pad_dim = output.nbDims - 3;
     for (int d = 0; d < input.nbDims; ++d) {
         output.d[d] = input.d[d]; 
-        if (d >= pad_dim) {
-            auto ind = 3 - output.nbDims + d;
-            assert(ind >= 0);
-            output.d[d] = output.d[d] + mPrePadding[ind] + mPostPadding[ind];
+        if (output.d[d]->isConstant()) {
+            if (d >= pad_dim) {
+                auto ind = 3 - output.nbDims + d;
+                assert(ind >= 0);
+                output.d[d] = exprBuilder.constant(output.d[d]->getConstantValue() + mPrePadding.d[ind] + mPostPadding.d[ind]);
+            }
+            std::cout <<"smq getOutput: pad after:" << output.d[d]->getConstantValue() << std::endl;
+        } else {
+            std::cout <<"smq getOutput dynamic:-1" << std::endl;
         }
     }
     return output;
@@ -124,7 +116,8 @@ void Padding3D::destroy()
     delete this;
 }
 
-size_t Padding3D::getWorkspaceSize(int) const
+size_t Padding3D::getWorkspaceSize(const nvinfer1::PluginTensorDesc* inputs, int nbInputs,
+    const nvinfer1::PluginTensorDesc* outputs, int nbOutputs) const
 {
     return 0;
 }
@@ -132,7 +125,7 @@ size_t Padding3D::getWorkspaceSize(int) const
 size_t Padding3D::getSerializationSize() const
 {
     // dimensions: 3 * 2
-    return sizeof(int) * 3 * 2;
+    return sizeof(int) * (5 + 3 * 2);
 }
 
 void Padding3D::serialize(void* buffer) const
@@ -182,7 +175,7 @@ const char* Padding3D::getPluginVersion() const
     return "1";
 }
 
-IPluginV2Ext* Padding3D::clone() const
+IPluginV2DynamicExt* Padding3D::clone() const
 {
     auto plugin = new Padding3D(*this);
     plugin->setPluginNamespace(mNameSpace.c_str());
@@ -199,30 +192,20 @@ const char* Padding3D::getPluginNamespace() const
     return mNameSpace.c_str();
 }
 
-bool Padding3D::supportsFormat(DataType type, PluginFormat format) const
-{
-    return (type == DataType::kFLOAT && format == PluginFormat::kNCHW);
+//bool Padding3D::supportsFormat(DataType type, PluginFormat format) const
+bool Padding3D::supportsFormatCombination(
+    int pos, const nvinfer1::PluginTensorDesc* inOut, int nbInputs, int nbOutputs) {
+    assert(nbInputs == 1);
+    assert(nbOutputs == 1);
+    const PluginTensorDesc& desc = inOut[pos];
+    return (desc.type == DataType::kFLOAT && desc.dims.nbDims == 5);
 }
 
-int Padding3D::enqueue(
-    int batch_size, const void* const* inputs, void** outputs, void* workspace, cudaStream_t stream)
-{
-
-    //int nchan = mOutputDims.d[0];
-    //float scale = mScale;
-    //int2 osize = {mOutputDims.d[2], mOutputDims.d[1]};
-    //int istride = mInputDims.d[2];
-    //int ostride = mOutputDims.d[2];
-    //int ibatchstride = mInputDims.d[1] * istride;
-    //int obatchstride = mOutputDims.d[1] * ostride;
-    //dim3 block(32, 16);
-    //dim3 grid((osize.x - 1) / block.x + 1, (osize.y - 1) / block.y + 1, std::min(batch_size * nchan, 65535));
-
-    //resizeNearest(grid, block, stream, batch_size * nchan, scale, osize, static_cast<float const*>(inputs[0]), istride,
-    //    ibatchstride, static_cast<float*>(outputs[0]), ostride, obatchstride);
-    mOutputDims = getOutputDimensions(0, &mInputDims, 1);
-    cuPadding3D(outputs[0], mOutputDims, inputs[0], batch_size, mInputDims, mPrePadding, mPostPadding, 0, stream);
-
+int Padding3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc, const nvinfer1::PluginTensorDesc* outputDesc,
+    const void* const* inputs, void* const* outputs, void* workspace, cudaStream_t stream) {
+    int batch_size = inputDesc->dims.d[0];
+    cuPad::cuPadding3D(outputs[0], mOutputDims, inputs[0], mInputDims, batch_size, mInputDims, mPrePadding, mPostPadding, 0, stream);
+    std::cout << "enqueue= " << mOutputDims.d[2] << " " << mOutputDims.d[3] << " " << mOutputDims.d[4] << std::endl;
     return cudaGetLastError() != cudaSuccess;
 }
 
@@ -237,33 +220,35 @@ DataType Padding3D::getOutputDataType(int index, const nvinfer1::DataType* input
 }
 
 // Return true if output tensor is broadcast across a batch.
-bool Padding3D::isOutputBroadcastAcrossBatch(int outputIndex, const bool* inputIsBroadcasted, int nbInputs) const
-{
-    return false;
-}
-
-// Return true if plugin can use input that is broadcast across batch without replication.
-bool Padding3D::canBroadcastInputAcrossBatch(int inputIndex) const
-{
-    return false;
-}
+//bool Padding3D::isOutputBroadcastAcrossBatch(int outputIndex, const bool* inputIsBroadcasted, int nbInputs) const
+//{
+//    return false;
+//}
+//
+//// Return true if plugin can use input that is broadcast across batch without replication.
+//bool Padding3D::canBroadcastInputAcrossBatch(int inputIndex) const
+//{
+//    return false;
+//}
 
 // Configure the layer with input and output data types.
-void Padding3D::configurePlugin(const Dims* inputDims, int nbInputs, const Dims* outputDims, int nbOutputs,
-    const DataType* inputTypes, const DataType* outputTypes, const bool* inputIsBroadcast,
-    const bool* outputIsBroadcast, PluginFormat floatFormat, int maxBatchSize)
-{
+//void Padding3D::configurePlugin(const Dims* inputDims, int nbInputs, const Dims* outputDims, int nbOutputs,
+//    const DataType* inputTypes, const DataType* outputTypes, const bool* inputIsBroadcast,
+//    const bool* outputIsBroadcast, PluginFormat floatFormat, int maxBatchSize)
+void Padding3D::configurePlugin(const nvinfer1::DynamicPluginTensorDesc* in, 
+        int nbInputs, const nvinfer1::DynamicPluginTensorDesc* out, int nbOutputs) {
     assert(nbInputs == 1);
-    mInputDims = inputDims[0];
+    mInputDims = in[0].desc.dims;
     assert(nbOutputs == 1);
-    mOutputDims = outputDims[0];
+    mOutputDims = out[0].desc.dims;
 }
 
-// Attach the plugin object to an execution context and grant the plugin the access to some context resource.
-void Padding3D::attachToContext(
-    cudnnContext* cudnnContext, cublasContext* cublasContext, IGpuAllocator* gpuAllocator)
-{
-}
+//// Attach the plugin object to an execution context and grant the plugin the access to some context resource.
+//void Padding3D::attachToContext(
+//    cudnnContext* cudnnContext, cublasContext* cublasContext, IGpuAllocator* gpuAllocator)
+//{
+//}
+//
+//// Detach the plugin object from its execution context.
+//void Padding3D::detachFromContext() {}
 
-// Detach the plugin object from its execution context.
-void Padding3D::detachFromContext() {}

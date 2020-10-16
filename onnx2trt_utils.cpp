@@ -249,7 +249,7 @@ int32_t* convertINT64(const int64_t* weightValues, nvinfer1::Dims shape, IImport
     return int32Weights;
 }
 
-bool convertOnnxPadding(const std::vector<int64_t>& onnxPadding, nvinfer1::Dims2* begPadding, nvinfer1::Dims2* endPadding)
+bool convertOnnxPadding2D(const std::vector<int64_t>& onnxPadding, nvinfer1::Dims* begPadding, nvinfer1::Dims* endPadding)
 {
     const size_t size = onnxPadding.size();
     const size_t half = size / 2;
@@ -263,6 +263,7 @@ bool convertOnnxPadding(const std::vector<int64_t>& onnxPadding, nvinfer1::Dims2
 
     begPadding->d[0] = onnxPadding[half - 2];
     begPadding->d[1] = onnxPadding[half - 1];
+    begPadding->nbDims = 2;
 
     for (size_t i = half; i < size - 2; i++)
     {
@@ -274,7 +275,38 @@ bool convertOnnxPadding(const std::vector<int64_t>& onnxPadding, nvinfer1::Dims2
 
     endPadding->d[0] = onnxPadding[size - 2];
     endPadding->d[1] = onnxPadding[size - 1];
+    endPadding->nbDims = 2;
+    return true;
+}
 
+bool convertOnnxPadding3D(const std::vector<int64_t>& onnxPadding, nvinfer1::Dims* begPadding, nvinfer1::Dims* endPadding)
+{
+    const size_t size = onnxPadding.size();
+    const size_t half = size / 2;
+    for (size_t i = 0; i < half - 3; i++)
+    {
+        if (onnxPadding[i] != 0)
+        {
+            return false;
+        }
+    }
+
+    begPadding->d[0] = onnxPadding[half - 3];
+    begPadding->d[1] = onnxPadding[half - 2];
+    begPadding->d[2] = onnxPadding[half - 1];
+    begPadding->nbDims = 3;
+    for (size_t i = half; i < size - 3; i++)
+    {
+        if (onnxPadding[i] != 0)
+        {
+            return false;
+        }
+    }
+
+    endPadding->d[0] = onnxPadding[size - 3];
+    endPadding->d[1] = onnxPadding[size - 2];
+    endPadding->d[2] = onnxPadding[size - 1];
+    endPadding->nbDims = 3;
     return true;
 }
 

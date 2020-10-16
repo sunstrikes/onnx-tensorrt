@@ -39,6 +39,8 @@
 #include <unordered_set>
 #include <iostream>
 
+#include "padding3DPlugin.h"
+
 namespace onnx2trt
 {
 
@@ -465,6 +467,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Conv)
     }
 
     const int nbSpatialDims = dims.nbDims - 2;
+    std::cout << "dims.nbDims: " << dims.nbDims << "  kernel.nbDims: " << kernelWeights.shape.nbDims << std::endl;
     // Check that the number of spatial dimensions and the kernel shape matches up.
     ASSERT(nbSpatialDims == kernelWeights.shape.nbDims - 2, ErrorCode::kUNSUPPORTED_NODE);
 
@@ -2202,7 +2205,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Pad)
         ASSERT(tensorPtr, ErrorCode::kUNSUPPORTED_NODE);
     }
 
-    nvinfer1::Dims2 begPadding, endPadding;
+    nvinfer1::Dims begPadding, endPadding;
     OnnxAttrs attrs(node, ctx);
     auto mode = attrs.get<std::string>("mode", "constant");
     float value{0.f};
@@ -2233,30 +2236,34 @@ DEFINE_BUILTIN_OP_IMPORTER(Pad)
     //ASSERT(convertOnnxPadding(onnxPadding, &begPadding, &endPadding)
     //    && "This version of TensorRT only supports padding on the outer two dimensions!",
     //    ErrorCode::kUNSUPPORTED_NODE);
-    if (convertOnnxPadding(onnxPadding, &begPadding, &endPadding)) {
+    
+    if (convertOnnxPadding2D(onnxPadding, &begPadding, &endPadding)) {
         //2d padding
+        std::cout << node.name() << " prePad: " << begPadding.nbDims << " postPad: " << endPadding.nbDims << std::endl;
         auto* layer = ctx->network()->addPaddingNd(*tensorPtr, begPadding, endPadding);
         ctx->registerLayer(layer, node.name());
         tensorPtr = layer->getOutput(0);
-    } else {
+    } else if (convertOnnxPadding3D(onnxPadding, &begPadding, &endPadding)) {
+        std::cout << node.name() << " prePad: " << begPadding.nbDims << " postPad: " << endPadding.nbDims << std::endl;
         // Populate instanceNormalization plugin properties.
         const std::string pluginName = "Padding3D_TRT";
         const std::string pluginVersion = "1";
         std::vector<nvinfer1::PluginField> f;
-        f.emplace_back("epsilon", &epsilon, nvinfer1::PluginFieldType::kFLOAT32, 1);
-        f.emplace_back("scales", scale_weights.values, nvinfer1::PluginFieldType::kFLOAT32, scale_weights.count());
-        f.emplace_back("bias", bias_weights.values, nvinfer1::PluginFieldType::kFLOAT32, bias_weights.count());
+        f.emplace_back("prePadding", &begPadding, nvinfer1::PluginFieldType::kDIMS, 1);
+        f.emplace_back("postPadding", &endPadding, nvinfer1::PluginFieldType::kDIMS, 1);
 
         // Create plugin from registry
-        nvinfer1::IPluginV2* plugin = createPlugin(node.name(), importPluginCreator(pluginName, pluginVersion), f);
-
-        ASSERT(plugin != nullptr && "InstanceNormalization plugin was not found in the plugin registry!",
+        std::shared_ptr<nvinfer1::IPluginV2Ext> plugin(new nvinfer1::plugin::Padding3D(begPadding, endPadding));
+        ASSERT(plugin != nullptr && "Padding3D_TRT plugin was not found in the plugin registry!",
             ErrorCode::kUNSUPPORTED_NODE);
 
         auto* layer = ctx->network()->addPluginV2(&tensorPtr, 1, *plugin);
         ctx->registerLayer(layer, node.name());
-        RETURN_FIRST_OUTPUT(layer);
+        tensorPtr = layer->getOutput(0);
+    } else {
+        return MAKE_ERROR("Assertion smq Pad failed: ", (ErrorCode::kUNSUPPORTED_NODE));
     }
+    
     // Squeeze back to original rank if necessary
     if (needToExpandDims)
     {

@@ -1,18 +1,17 @@
-#include "kernelUtils.h"
-#include "padding.h"
+#include "padding3D.h"
 #include "reducedMath.h"
-#include "safeHelpers.h"
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <stdio.h>
+#include <cassert>
+#include <iostream>
 
 using nvinfer1::rt::reduced_divisor;
 
 namespace cuPad
 {
 
-namespace
-{
+namespace {
 
 //template <int Unroll, typename T>
 //__device__ __forceinline__ void applyScale(T tmp[Unroll], int c, const float* inI8Scale, const float* outI8Scale)
@@ -36,49 +35,35 @@ namespace
 //    }
 //}
 
+
+
 struct float32
 {
     float x[32];
 };
 
+template <typename U>
+__device__ __forceinline__ U defaultValue(bool negativeInfinityPadding)
+{
+        return U();
+}
+
 template <>
 __device__ __forceinline__ float defaultValue(bool negativeInfinityPadding)
 {
-    constexpr float inf = std::numeric_limits<float>::infinity();
-    if (negativeInfinityPadding)
-    {
-        return -inf;
-    }
-    else
-    {
-        return 0.0f;
-    }
+    return 0.0f;
 }
 
 template <>
 __device__ __forceinline__ float32 defaultValue<float32>(bool negativeInfinityPadding)
 {
-    constexpr float inf = std::numeric_limits<float>::infinity();
-    if (negativeInfinityPadding)
+    float32 zero;
+    #pragma unroll
+    for (size_t i = 0; i < 32; i++)
     {
-        float32 negInf;
-        #pragma unroll
-        for (size_t i = 0; i < 32; i++)
-        {
-            negInf.x[i] = -inf;
-        }
-        return negInf;
+        zero.x[i] = 0.0f;
     }
-    else
-    {
-        float32 zero;
-        #pragma unroll
-        for (size_t i = 0; i < 32; i++)
-        {
-            zero.x[i] = 0.0f;
-        }
-        return zero;
-    }
+    return zero;
 }
 
 } // namespace
@@ -126,9 +111,9 @@ __global__ __launch_bounds__(BlockDim) void pad(U* dst, nvinfer1::Dims dstStride
     divPQ.divmod(cpq, c, pq);
 
     // Set (C,H,W) to input image size.
-    int H = P - postH - preH;
-    int W = Q - postW - preW;
-    int C = C - postC - preC;
+    int rH = P - postH - preH;
+    int rW = Q - postW - preW;
+    int rC = C - postC - preC;
 
     if (n < N)
     {
@@ -144,7 +129,7 @@ __global__ __launch_bounds__(BlockDim) void pad(U* dst, nvinfer1::Dims dstStride
         T tmp[Unroll];
 
         // Load a chunk
-        *reinterpret_cast<U*>(tmp) = indc >= 0 && indc < C && h >= 0 && h < H && w >= 0 && w < W? src[srcIndex] : defaultValue<U>(negativeInfinityPadding);
+        *reinterpret_cast<U*>(tmp) = indc >= 0 && indc < rC && h >= 0 && h < rH && w >= 0 && w < rW? src[srcIndex] : defaultValue<U>(negativeInfinityPadding);
         // Scale the chunk if necessary
         //applyScale<Unroll>(tmp, c, inI8Scale, outI8Scale);
 
@@ -158,7 +143,7 @@ __global__ __launch_bounds__(BlockDim) void pad(U* dst, nvinfer1::Dims dstStride
 template <typename T, typename U, int LgPerVector, bool isCHW = true>
 void sublaunch(void* dst, nvinfer1::Dims dstStride, const void* src, nvinfer1::Dims srcStride,
                int batchSize, const Dims& outputDims,
-               const Dims3& prePadding, const Dims3& postPadding,
+               const Dims& prePadding, const Dims& postPadding,
                const cudaStream_t stream) {
     assert(sizeof(U) == sizeof(T) << LgPerVector);
     assert((dstStride.d[0] & ((1 << LgPerVector) - 1)) == 0);
@@ -209,7 +194,7 @@ void sublaunch(void* dst, nvinfer1::Dims dstStride, const void* src, nvinfer1::D
     */
 void cuPadding3D(void* dst, nvinfer1::Dims dstStride, const void* src, nvinfer1::Dims srcStride,
             int batchSize, const Dims& outputDims,
-            const Dims3& prePadding, const Dims3& postPadding, 
+            const Dims& prePadding, const Dims& postPadding, 
             int lgScalarsPerElement, const cudaStream_t stream) {
     if (lgScalarsPerElement == 0) {
         sublaunch<float, float, 0>(dst, dstStride, src, srcStride, batchSize, outputDims, prePadding, postPadding, stream);
@@ -219,3 +204,4 @@ void cuPadding3D(void* dst, nvinfer1::Dims dstStride, const void* src, nvinfer1:
 }
 
 } // namespace cuPad
+
